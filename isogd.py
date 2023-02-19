@@ -300,12 +300,50 @@ class Info:
                     # Print centered page number
                     self.cell(0, 10, 'Page %s' % self.page_no(), 0, 0, 'C')
 
-                def head(self, Layer_Source_Name):
-                    self.cell(200, 6, Layer_Source_Name, 1, 0, "C")
-                    self.ln(40)
+                def head(self, Layer_Source_Name, SelectedFeature):
+
+                    self.image("C:/Users/18098/AppData/Roaming/QGIS/QGIS3/profiles/default/python/plugins/isogd/Герб.jpg", x=30, y=10, w=10, h=0, type='jpg', link='')
+                    self.ln(18)
+
+                    self.set_font("Sans", size=7)
+                    # цвет линий таблицы
+                    self.set_draw_color(255, 255, 255)
+                    data_blanks = ['Кемеровская область - Кузбасс',
+                                  'Новокузнецкий городской округ',
+                                  ' ',
+                                  'КОМИТЕТ ГРАДОСТРОИТЕЛЬСТВА',
+                                  'И ЗЕМЕЛЬНЫХ РЕСУРСОВ',
+                                  'АДМИНИСТРАЦИИ',
+                                  'ГОРОДА НОВОКУЗНЕЦКА'
+                                  ]
+                    for data_blank in data_blanks:
+                        self.cell(50, 5, data_blank, 1, 0, "C")
+                        self.ln(5)
+
+
+                    self.set_y(28)
+                    self.set_x(100)
+
+                    self.set_font('Sans', 'B', 14)
+                    self.set_draw_color(100, 15, 255)
+                    self.cell(50, 6, "СВЕДЕНИЯ ИСОГД")
+                    self.set_y(38)
+                    self.set_x(100)
+
+                    fields_source = SelectedFeature.fields()
+
+                    self.cell(300, 6, fields_source[0].name())
+                    self.ln(6)
+
+                    self.ln(50)
+
+
+
+                    # self.cell(200, 6, Layer_Source_Name, 1, 0, "C")
+                    # self.ln(40)
+                    self.set_font("Sans", size=7)
 
                 def basic_table(self, headings, rows, col_width, pathLayer):
-
                     # цвет текста
                     self.set_text_color(255)
                     # цвет линий таблицы
@@ -366,8 +404,8 @@ class Info:
                 time_now = data_time.strftime("%H%M%S")
                 print(time_now)
                 pathLayers = [
-                              # 'D:/Эксперименты в Qgis/Spravka/Охранная зона 1.shp',
-                              'T:/Номенклатура/Лист_500.TAB'
+                              'D:/Эксперименты в Qgis/Spravka/Охранная зона 1.shp',
+                              # 'T:/Номенклатура/Лист_500.TAB'
                               # 'T:/NOVOKUZ/Красные_линии_полигон.TAB',
                               #
                               # 'T:/Территориальные зоны/Терр_зоны_на_ГКУМСК42зона2.TAB',
@@ -409,8 +447,8 @@ class Info:
                               # 'D:/Эксперименты в Qgis/Spravka/Охранная зона 2.shp'
                                 ]
                 col_widths = [
-                              # [20, 20, 14],
-                              [43, 43, 14]  #T:/Номенклатура /Лист_500.TAB
+                              [20, 20, 14]
+                              # [43, 43, 14]  #T:/Номенклатура /Лист_500.TAB
                               # [10, 126, 14],  # T:/NOVOKUZ/Красные_линии_полигон.TAB
                               #
                               # [46, 46, 47, 47, 14],  # T:/Территориальные зоны/Терр_зоны_на_ГКУМСК42зона2.TAB
@@ -494,7 +532,7 @@ class Info:
                         pdf.set_font("Sans", size=7)
                         pdf.add_page()
 
-                        pdf.head(Layer_Source_Name)
+                        pdf.head(Layer_Source_Name, SelectedFeature)
 
                         progress = QProgressDialog("ИСОГД работает изо всех сил...", "Cancel", 0, len(pathLayers)) # процесс выполнения
                         progress.setWindowModality(Qt.WindowModal)
