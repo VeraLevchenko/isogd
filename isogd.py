@@ -462,7 +462,7 @@ class Info:
                               [20, 20, 20, 146, 60, 20, 20, 20, 20, 20, 20, 14],  # T:/NOVOKUZ/ФГУ участки/KK.TAB
 
                               [18, 30, 80, 50, 45, 20, 32, 22, 22, 40, 10, 17, 14], # T:/NOVOKUZ/Участки.TAB
-                              [27, 25, 190, 50, 18, 21, 36, 19, 14],  # T:/NOVOKUZ/ФГУ участки/ACTUAL_LAND.TAB
+                              [27, 30, 190, 50, 16, 18, 36, 19, 14],  # T:/NOVOKUZ/ФГУ участки/ACTUAL_LAND.TAB
 
                               [64, 66, 64, 64, 64, 64, 14],  # T:/ADRES/Строения.TAB
                               [38, 38, 38, 38, 38, 38, 38, 40, 40, 40, 14],  # T:/NOVOKUZ/ФГУ участки/ACTUAL_OKSN.TAB
@@ -543,7 +543,7 @@ class Info:
 
                         pdf.head(Layer_Source_Name, SelectedFeature)
 
-                        progress = QProgressDialog("ИСОГД работает изо всех сил...", "Cancel", 0, len(pathLayers)) # процесс выполнения
+                        progress = QProgressDialog("ИСОГД старается изо всех сил...", "Cancel", 0, len(pathLayers)) # процесс выполнения
                         progress.setWindowModality(Qt.WindowModal)
 
                         i = 0
