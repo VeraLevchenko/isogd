@@ -29,9 +29,15 @@ from qgis.core import QgsVectorLayer, QgsField
 import datetime as dt
 import os
 from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QFileDialog
-# from PyQt5 import QtGui, QtCore
-from fpdf import FPDF
 
+# ==== PATCH: подключаем локальные зависимости плагина до импорта fpdf ====
+import sys
+_EXTLIBS = os.path.join(os.path.dirname(__file__), 'extlibs')
+if os.path.isdir(_EXTLIBS) and _EXTLIBS not in sys.path:
+    sys.path.insert(0, _EXTLIBS)
+# ========================================================================
+
+from fpdf import FPDF  # fpdf2
 
 # Initialize Qt resources from file resources.py
 from .resources import *
@@ -312,7 +318,7 @@ class Info:
                                   'Новокузнецкий городской округ',
                                   ' ',
                                   'КОМИТЕТ ГРАДОСТРОИТЕЛЬСТВА',
-                                  'И ЗЕМЕЛЬНЫХ РЕСУРСОВ',
+                                  'И АРХИТЕКТУРЫ',
                                   'АДМИНИСТРАЦИИ',
                                   'ГОРОДА НОВОКУЗНЕЦКА'
                                   ]
@@ -403,6 +409,30 @@ class Info:
                 name_dir = QFileDialog.getExistingDirectory(None, 'Выберите папку для сохранения Справки')
                 return name_dir
 
+            def _register_fonts(pdf: FPDF):
+                """Регистрируем TTF-шрифты из подпапки plugins/isogd/fonts.
+                При отсутствии — фолбэк на встроенный Helvetica (без кириллицы)."""
+                fonts_dir = os.path.join(os.path.dirname(__file__), "fonts")
+                reg = os.path.join(fonts_dir, "NotoSans-Regular.ttf")
+                bold = os.path.join(fonts_dir, "NotoSans-Bold.ttf")
+                italic = os.path.join(fonts_dir, "NotoSans-Italic.ttf")
+                bolditalic = os.path.join(fonts_dir, "NotoSans-BoldItalic.ttf")
+
+                if all(os.path.exists(p) for p in (reg, bold)):
+                    # fpdf2: add_font без параметра uni
+                    pdf.add_font("Sans", style="",  fname=reg)
+                    pdf.add_font("Sans", style="B", fname=bold)
+                    if os.path.exists(italic):
+                        pdf.add_font("Sans", style="I", fname=italic)
+                    if os.path.exists(bolditalic):
+                        pdf.add_font("Sans", style="BI", fname=bolditalic)
+                    pdf.set_font("Sans", size=7)
+                    return True
+                else:
+                    # Фолбэк — встроенный Helvetica (латиница)
+                    pdf.set_font("helvetica", size=7)
+                    return False
+
             def isogd():
                 data_time = dt.datetime.now()
                 time_now = data_time.strftime("%H%M%S")
@@ -424,6 +454,7 @@ class Info:
 
                               'T:/NOVOKUZ/Схема расположения.TAB',
                               'T:/NOVOKUZ/Предварительно согласованные.TAB',
+                              'T:/NOVOKUZ/Банк ЗУ многодетные.TAB',
                               'T:/NOVOKUZ/Проекты планировок и межеваний.TAB',
 
                               'T:/NOVOKUZ/ФГУ участки/ACTUAL_ZOUIT.TAB',
@@ -442,9 +473,11 @@ class Info:
                               'T:/NOVOKUZ/Разрешение на использование ЗУ.TAB',
                               'T:/NOVOKUZ/Схема НТО.TAB',
                               'T:/NOVOKUZ/Схема НТО/Договоры НТО.TAB',
+                              'T:/NOVOKUZ/Металлические_гаражи.TAB',
                               'T:/NOVOKUZ/Сервитуты.TAB',
                               'T:/NOVOKUZ/Ветхое и аварийное жильё.TAB',
 
+                              'T:/NOVOKUZ/Запреты/Переселение 185 ФЗ/Лэнд_аварий.TAB',
                               'T:/NOVOKUZ/Запреты/Арест судебные приставы/Запрет судебных приставов.TAB',
                               'T:/NOVOKUZ/Запреты/Реконструкция южного въезда/Южная автомагистраль.TAB',
                               'T:/NOVOKUZ/Запреты/Строительство Байдаевского моста/Байдаевский мост изъятие.TAB',
@@ -474,6 +507,7 @@ class Info:
 
                               [10, 50, 10, 10, 60, 60, 10, 10, 10, 10, 10, 10, 20, 10, 10, 10, 46, 10, 10, 10, 14],  # T:/NOVOKUZ/Схема расположения.TAB
                               [42, 72, 64, 42, 20, 20, 42, 42, 42, 14],  # T:/NOVOKUZ/Предварительно согласованные.TAB
+                              [14, 206, 32, 32, 60, 42, 14],  # T:/NOVOKUZ/Банк ЗУ многодетные.TAB
                               [30, 70, 26, 28, 28, 26, 26, 26, 26, 100, 14],  # T:/NOVOKUZ/Проекты планировок и межеваний.TAB
 
                               [100, 36, 40, 150, 40, 20, 14],  # T:/NOVOKUZ/ФГУ участки/ACTUAL_ZOUIT.TAB
@@ -492,9 +526,11 @@ class Info:
                               [10, 60, 25, 20, 15, 22, 26, 70, 70, 19, 27, 22, 14], # T:/NOVOKUZ/Разрешение на использование ЗУ.TAB
                               [20, 50, 15, 15, 20, 20, 70, 30, 66, 20, 20, 20, 20, 14], # T:/NOVOKUZ/Схема НТО.TAB'
                               [20, 66, 20, 20, 20, 20, 20, 20, 20, 70, 45, 25, 20, 14], # T:/NOVOKUZ/Схема НТО/Договоры НТО.TAB'
+                              [40, 90, 40, 30, 70, 36, 30, 30, 20, 14],  # T:/NOVOKUZ/Металлические_гаражи.TAB.TAB'
                               [16, 25, 20, 20, 18, 12, 25, 25, 50, 20, 15, 10, 40, 50, 20, 20, 14],  # T:/NOVOKUZ/Сервитуты.TAB
                               [56, 55, 55, 55, 55, 55, 55, 14], #T:/NOVOKUZ/Ветхое и аварийное жильё.TAB
 
+                              [100, 242, 30, 14, 14], # T:/NOVOKUZ/Запреты/Переселение 185 ФЗ/Лэнд_аварий.TAB
                               [66, 64, 64, 64, 64, 64, 14], # T:/NOVOKUZ/Запреты/Арест судебные приставы/Запрет судебных приставов.TAB
                               [18, 30, 80, 50, 45, 20, 32, 22, 22, 40, 10, 17, 14], # T:/NOVOKUZ/Запреты/Реконструкция южного въезда/Южная автомагистраль.TAB
                               [20, 20, 46, 40, 40, 20, 20, 20, 20, 70, 25, 25, 20, 14], # T:/NOVOKUZ/Запреты/Строительство Байдаевского моста/Байдаевский мост изъятие.TAB
@@ -530,27 +566,14 @@ class Info:
 
                         SelectedFeatureGeometry = SelectedFeature.geometry()  # получаем геометрию объекта
 
-
                         # --------------------подготовка к печати pdf
                         pdf = PDF(orientation="L", unit="mm", format="A3")
 
-                        # включаем TTF шрифты, поддерживающие кириллицу
-                        pdf.add_font("Sans", style="",
-                                     fname="C:/Fonts/NotoSans-Regular.ttf",
-                                     uni=True)
-                        pdf.add_font("Sans", style="B",
-                                     fname="C:/Fonts/NotoSans-Bold.ttf",
-                                     uni=True)
-                        pdf.add_font("Sans", style="I",
-                                     fname="C:/Fonts/NotoSans-Italic.ttf",
-                                     uni=True)
-                        pdf.add_font("Sans", style="BI",
-                                     fname="C:/Fonts/NotoSans-BoldItalic.ttf",
-                                     uni=True)
-                        # настройка шрифта
-                        pdf.set_font("Sans", size=7)
-                        pdf.add_page()
+                        # ==== PATCH: регистрация локальных шрифтов ====
+                        has_fonts = _register_fonts(pdf)
+                        # =================================================
 
+                        pdf.add_page()
                         pdf.head(Layer_Source_Name, SelectedFeature)
 
                         progress = QProgressDialog("ИСОГД старается изо всех сил...", "Cancel", 0, len(pathLayers)) # процесс выполнения
