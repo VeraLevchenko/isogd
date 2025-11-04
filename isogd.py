@@ -7,17 +7,6 @@ isogd.py — QGIS/NextGIS плагин формирования PDF-отчёта
 - extlibs/fpdf2 (пакет fpdf)
 - extlibs/PIL (Pillow — опционально: для вставки изображений)
 - fonts/NotoSans-*.ttf (кириллица)
-
-columns_config.json (рядом с этим файлом), пример:
-{
-  "rules": [
-    { "pattern": ".*Участки\\.TAB$", "columns": [0, 1, 2, "%пересеч"] },
-    { "pattern": ".*ACTUAL_OKSN\\.TAB$", "columns": ["CAD_NUM", "ADDRESS", "AREA", "%пересеч"] },
-    { "pattern": ".*КУМИ_схема_расположения\\.TAB$", "columns": [0,1,2,"%пересеч"] },
-    { "pattern": ".*КУМИ_предварительно_согласованные_с_кадастровым_номером\\.TAB$", "columns": ["CAD_NUM","ADDRESS","AREA","%пересеч"] }
-  ],
-  "default": [0, 1, 2, "%пересеч"]
-}
 """
 
 import os
@@ -40,7 +29,8 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox, QProgressDialog, QFileDialog
 from qgis.core import (
     QgsVectorLayer, QgsFeatureRequest,
-    QgsSpatialIndex, QgsMessageLog, Qgis
+    QgsSpatialIndex, QgsMessageLog, Qgis,
+    QgsWkbTypes
 )
 from qgis.utils import iface
 
@@ -135,7 +125,11 @@ def resolve_columns(fields_intersect, selector_list):
     return headers, idxs, add_percent
 
 
-def make_table_filtered(fields_intersect, feat_intersect, procs, path_layer, rules, default_rule):
+def make_table_filtered(fields_intersect, feat_intersect, procs, areas, path_layer, rules, default_rule):
+    """
+    Формирует заголовки и строки таблицы согласно rules/default.
+    Дополнительно: для слоя ACTUAL_ZOUIT.TAB добавляет колонку 'Площадь пересеч, м²'.
+    """
     selector = pick_rule_for_layer(rules, default_rule, path_layer)
     headers, idxs, add_percent = resolve_columns(fields_intersect, selector)
 
@@ -147,15 +141,24 @@ def make_table_filtered(fields_intersect, feat_intersect, procs, path_layer, rul
         if "% пересеч" not in headers:
             headers.append("% пересеч")
 
+    # Нужен ли столбец площади? (только для ACTUAL_ZOUIT.TAB)
+    add_area_col = bool(re.search(r'ACTUAL_ZOUIT\.TAB$', path_layer, re.IGNORECASE))
+    if add_area_col:
+        headers = list(headers)
+        if "Площадь пересеч, м²" not in headers:
+            headers.append("Площадь пересеч, м²")
+
     rows = []
     if feat_intersect:
-        for feat, proc in zip(feat_intersect, procs):
+        for feat, proc, area in zip(feat_intersect, procs, areas):
             row = []
             for i in idxs:
                 val = feat.attribute(fields_intersect[i].name())
                 row.append("" if val is None else str(val))
             if add_percent:
                 row.append(proc)
+            if add_area_col:
+                row.append("" if area is None else str(round(float(area), 2)))
             rows.append(row)
     else:
         if not headers:
@@ -170,14 +173,12 @@ def _natural_text_width(pdf: FPDF, text: str, padding=2.0):
     return pdf.get_string_width(text) + 2 * padding
 
 def _distribute_delta(widths, target_sum):
-    """Равномерно распределяем остаток, чтобы sum(widths)==target_sum."""
     s = sum(widths)
     if s == 0:
         return widths
     delta = target_sum - s
     if abs(delta) < 0.05:
         return widths
-    # распределим пропорционально текущим ширинам (более «широкие» получат больше)
     total = sum(widths)
     if total <= 0:
         step = delta / len(widths)
@@ -186,52 +187,32 @@ def _distribute_delta(widths, target_sum):
 
 
 def measure_col_widths(pdf: FPDF, headers, rows, max_total_width, font_name="Sans", font_size=7):
-    """
-    1) считаем «естественную» ширину каждой колонки по заголовку и данным;
-    2) применяем минимальную ширину;
-    3) если суммарно меньше доступной ширины — «дотягиваем» до full-width;
-    4) если больше — масштабируем пропорционально;
-    В итоге sum(col_widths) == max_total_width.
-    """
     pdf.set_font(font_name, "", font_size)
-
-    # Минимальные ширины (чтобы не исчезали узкие столбцы)
     MIN_W = 14.0
-    # Для заголовка используем чуть более жирный шрифт — учтём его вклад:
     header_font_size = max(7, font_size + 1)
 
-    # 1) Естественные ширины
     natural = []
     for j, head in enumerate(headers):
-        # ширина по заголовку (без переноса — в одну строку)
         pdf.set_font(font_name, "B", header_font_size)
         w_head = _natural_text_width(pdf, "" if head is None else str(head))
-
-        # ширина по данным
         pdf.set_font(font_name, "", font_size)
         w_data = 0.0
         for row in rows:
             if j < len(row):
                 w_data = max(w_data, _natural_text_width(pdf, "" if row[j] is None else str(row[j])))
-
         natural.append(max(w_head, w_data, MIN_W))
 
     total = sum(natural)
-    # 2) Если ширины нулевые (пустая таблица), равномерно распределим
     if total <= 0:
         return [max_total_width / max(1, len(headers))] * len(headers)
 
-    # 3) Масштаб/дотяжка
     if total > max_total_width:
-        # ужать пропорционально
         k = max_total_width / total
         widths = [max(MIN_W, w * k) for w in natural]
     else:
-        # «дотянуть» до края
         widths = natural[:]
         widths = _distribute_delta(widths, max_total_width)
 
-    # Финальное выравнивание суммы
     s = sum(widths)
     if s != 0 and abs(s - max_total_width) > 0.05:
         k = max_total_width / s
@@ -241,13 +222,11 @@ def measure_col_widths(pdf: FPDF, headers, rows, max_total_width, font_name="San
 
 
 def estimate_row_height(pdf: FPDF, texts, col_widths, line_h=5.0, font_name="Sans", font_size=7):
-    """Оцениваем высоту строки для multi_cell (перенос по необходимости)."""
     pdf.set_font(font_name, "", font_size)
     max_lines = 1
     avg_char_w = max(1.0, pdf.get_string_width("W"))
     for text, w in zip(texts, col_widths):
         s = str(text) if text is not None else ""
-        # сырая оценка числа строк при переносе
         chars_per_line = max(1, int((w - 2.0) / avg_char_w))
         lines = 1 + (len(s) // max(1, chars_per_line))
         if lines > max_lines:
@@ -282,9 +261,6 @@ def draw_row(pdf: FPDF, texts, col_widths, line_h=5.0, font_name="Sans", font_si
 
 
 def draw_header_row_single_line(pdf: FPDF, headers, col_widths, line_h=6.0, font_name="Sans", font_size=8, fill_bg=None, text_color=(0,0,0)):
-    """
-    Шапка колонок: одна строка без переноса (cell вместо multi_cell).
-    """
     y_start = pdf.get_y()
     x = pdf.l_margin
     pdf.set_x(x)
@@ -301,7 +277,6 @@ def draw_header_row_single_line(pdf: FPDF, headers, col_widths, line_h=6.0, font
     for w, head in zip(col_widths, headers):
         pdf.rect(x, y_start, w, h)
         pdf.set_xy(x, y_start)
-        # без переноса: что не влезло — визуально обрежется рамкой
         pdf.cell(w, h, "" if head is None else str(head), border=0, align="C")
         x += w
 
@@ -333,10 +308,8 @@ def draw_table(pdf: FPDF, title, headers, rows, max_total_width,
     if not rows:
         rows = [["Нет данных"]]
 
-    # --- ширины по содержимому на всю страницу ---
     col_widths = measure_col_widths(pdf, headers, rows, max_total_width, font_name, font_size)
 
-    # высоты «сервисных» элементов
     section_bar_h = 7
     header_line_h = 6.0
 
@@ -349,19 +322,17 @@ def draw_table(pdf: FPDF, title, headers, rows, max_total_width,
         header_fill = (245, 245, 245)
         zebra_color = (248, 248, 248)
     else:
-        accent = (180, 180, 180)       # серый заголовок секции
+        accent = (180, 180, 180)
         title_text = (0, 0, 0)
-        header_fill = (235, 235, 235)  # светло-серый хедер
+        header_fill = (235, 235, 235)
         zebra_color = None
 
-    # Полоса секции — на всю ширину таблицы
     pdf.set_font(font_name, "B", 9)
     pdf.set_fill_color(*accent)
     pdf.set_text_color(*title_text)
     pdf.cell(sum(col_widths), section_bar_h, title, ln=1, align="C", fill=True)
     pdf.set_text_color(0,0,0)
 
-    # Шапка (одна строка)
     draw_header_row_single_line(
         pdf, headers, col_widths,
         line_h=header_line_h,
@@ -369,7 +340,6 @@ def draw_table(pdf: FPDF, title, headers, rows, max_total_width,
         fill_bg=header_fill, text_color=(0,0,0)
     )
 
-    # Строки (перенос по необходимости)
     fill = False
     for r in rows:
         rh = estimate_row_height(pdf, r, col_widths, line_h=5.0, font_name=font_name, font_size=font_size)
@@ -438,7 +408,7 @@ def register_fonts(pdf: FPDF, plugin_dir: str) -> bool:
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
         self.plugin_dir = kwargs.pop("plugin_dir", os.path.dirname(__file__))
-        font_subsetting = kwargs.pop("font_subsetting", None)  # для новых fpdf2
+        font_subsetting = kwargs.pop("font_subsetting", None)  # для новых версий fpdf2
         super().__init__(*args, **kwargs)
 
         self._doc_header_shown = False
@@ -469,6 +439,7 @@ class PDF(FPDF):
     def header(self):
         if self._doc_header_shown:
             return
+
         logo_path = os.path.join("T:/NOVOKUZ/Герб/Герб.jpg")
         try_place_logo(self, logo_path, x=15, y=10, target_w=12)
 
@@ -500,10 +471,23 @@ class PDF(FPDF):
 
 # ========================= ПОИСК ПЕРЕСЕЧЕНИЙ =========================
 class CheckLayers:
+    """
+    Для слоя pathLayer находит фичи, пересекающиеся с geom_sel (ожидаем выбранный ПОЛИГОН).
+    Возвращает:
+      self.fields         — QgsFields пересекаемого слоя,
+      self.feat_intersect — список фич с пересечением,
+      self.procs          — проценты пересечения (строки, 5 знаков),
+      self.areas          — площадь пересечения (м²) для полигонов, иначе None.
+    %
+      - полигоны: area(intersection) / area(geom_sel) * 100
+      - линии:    length(intersection) / length(фичи) * 100
+      - точки:    100, если точка попала внутрь geom_sel
+    """
     def __init__(self, pathLayer, geom_sel):
         self.fields = []
         self.feat_intersect = []
         self.procs = []
+        self.areas = []
 
         layer_check = QgsVectorLayer(pathLayer, pathLayer, "ogr")
         if not layer_check or not layer_check.isValid():
@@ -512,12 +496,12 @@ class CheckLayers:
 
         self.fields = layer_check.fields()
 
+        s1_area = float(geom_sel.area()) if geom_sel and not geom_sel.isEmpty() else 0.0
+
         try:
             idx = QgsSpatialIndex(layer_check.getFeatures())
         except Exception:
             idx = None
-
-        s1 = float(geom_sel.area()) or 1.0
 
         if idx:
             ids = idx.intersects(geom_sel.boundingBox())
@@ -528,16 +512,48 @@ class CheckLayers:
 
         for feat in features:
             geom = feat.geometry()
-            if not geom:
+            if not geom or geom.isEmpty():
                 continue
             try:
                 if not geom_sel.intersects(geom):
                     continue
+
                 inter = geom_sel.intersection(geom)
-                if inter and inter.area() > 0:
-                    proc = str(round(float(inter.area()) * 100.0 / s1, 5))
-                    self.feat_intersect.append(feat)
-                    self.procs.append(proc)
+                if not inter or inter.isEmpty():
+                    continue
+
+                gtype = QgsWkbTypes.geometryType(geom.wkbType())
+
+                if gtype == QgsWkbTypes.PolygonGeometry:
+                    if s1_area <= 0:
+                        continue
+                    inter_area = float(inter.area())
+                    if inter_area <= 0:
+                        continue
+                    percent = inter_area * 100.0 / s1_area
+                    area_val = inter_area  # м²
+
+                elif gtype == QgsWkbTypes.LineGeometry:
+                    line_len = float(geom.length())
+                    if line_len <= 0:
+                        continue
+                    inter_len = float(inter.length())
+                    if inter_len <= 0:
+                        continue
+                    percent = inter_len * 100.0 / line_len
+                    area_val = None
+
+                elif gtype == QgsWkbTypes.PointGeometry:
+                    percent = 100.0
+                    area_val = None
+
+                else:
+                    continue
+
+                self.feat_intersect.append(feat)
+                self.procs.append(str(round(percent, 5)))
+                self.areas.append(area_val)
+
             except Exception:
                 continue
 
@@ -666,11 +682,11 @@ class Info:
             self.window_error("Не удалось получить выбранные объекты.")
             return
 
+        # === ОБНОВЛЁННЫЙ СПИСОК СЛОЁВ ===
         DATA_LAYERS = [
             'T:/Номенклатура/Лист_500.TAB',
             'T:/NOVOKUZ/Красные_линии_полигон.TAB',
-            'T:/Территориальные зоны/Терр_зоны_на_ГКУМСК42зона2.TAB',
-            'O:/_Str-ISOGD/ПЗиЗ/10. ПЗиз Проект июнь 2023/Вектор/Общий объединенный июнь 2023.TAB',
+            'T:/NOVOKUZ/_Правила землепользования и застройки/Территориальные_зоны_пр.TAB',
             'T:/NOVOKUZ/ФГУ участки/KK.TAB',
             'T:/NOVOKUZ/Участки.TAB',
             'T:/NOVOKUZ/ФГУ участки/ACTUAL_LAND.TAB',
@@ -724,7 +740,7 @@ class Info:
         progress.setWindowModality(Qt.WindowModal)
 
         SelectedFeatureGeometry = SelectedFeature.geometry()
-        max_table_width = pdf.w - pdf.l_margin - pdf.r_margin  # на всю ширину страницы между полями
+        max_table_width = pdf.w - pdf.l_margin - pdf.r_margin  # на всю ширину страницы
 
         for i, pathLayer in enumerate(DATA_LAYERS, 1):
             if progress.wasCanceled():
@@ -734,7 +750,7 @@ class Info:
             a = CheckLayers(pathLayer, SelectedFeatureGeometry)
 
             headers, rows = make_table_filtered(
-                a.fields, a.feat_intersect, a.procs, pathLayer,
+                a.fields, a.feat_intersect, a.procs, a.areas, pathLayer,
                 self.column_rules, self.default_rule
             )
 
