@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import json
+import random
 import datetime as dt
 
 # --- extlibs в sys.path до импортов внешних пакетов ---
@@ -429,8 +430,7 @@ class PDF(FPDF):
         self.set_creator("isogd QGIS plugin")
         self.alias_nb_pages()
 
-        # Поля — чтобы таблица была «во всю ширину»
-        self.set_auto_page_break(auto=True, margin=15)  # нижнее поле
+        self.set_auto_page_break(auto=True, margin=15)
         self.set_left_margin(10)
         self.set_right_margin(10)
 
@@ -672,6 +672,7 @@ class Info:
             self.window_error("Не выбрано ни одного объекта.")
             return
 
+        # Запрос папки С ОДИН РАЗ для всех выбранных объектов
         dir_name = self.get_dir_name()
         if not dir_name:
             QMessageBox.information(None, "ISOGD", "Сохранение отменено.")
@@ -682,7 +683,7 @@ class Info:
             self.window_error("Не удалось получить выбранные объекты.")
             return
 
-        # === ОБНОВЛЁННЫЙ СПИСОК СЛОЁВ ===
+        # === СПИСОК СЛОЁВ ===
         DATA_LAYERS = [
             'T:/Номенклатура/Лист_500.TAB',
             'T:/NOVOKUZ/Красные_линии_полигон.TAB',
@@ -726,64 +727,70 @@ class Info:
             'T:/NOVOKUZ/Граница населенного пункта город Новокузнецк.TAB'
         ]
 
-        pdf = PDF(orientation="L", unit="mm", format="A3", plugin_dir=self.plugin_dir)
-        pdf.add_page()
+        # Итерация по всем выбранным объектам; папка dir_name — одна на все файлы
+        for sf_index, SelectedFeature in enumerate(SelectedFeatures, start=1):
+            pdf = PDF(orientation="L", unit="mm", format="A3", plugin_dir=self.plugin_dir)
+            pdf.add_page()
 
-        SelectedFeature = SelectedFeatures[0]
-        try:
-            self._print_header_block(pdf, Layer, SelectedFeature)
-        except Exception as e:
-            log_warn(f"Не удалось вывести шапку с атрибутами исходного слоя: {e}")
+            try:
+                self._print_header_block(pdf, Layer, SelectedFeature)
+            except Exception as e:
+                log_warn(f"Не удалось вывести шапку с атрибутами исходного слоя: {e}")
 
-        progress = QProgressDialog("ИСОГД формирует отчёт...", "Отмена", 0, len(DATA_LAYERS))
-        progress.setWindowModality(Qt.WindowModal)
+            progress = QProgressDialog(f"ИСОГД формирует отчёт ({sf_index}/{len(SelectedFeatures)})...",
+                                       "Отмена", 0, len(DATA_LAYERS))
+            progress.setWindowModality(Qt.WindowModal)
 
-        SelectedFeatureGeometry = SelectedFeature.geometry()
-        max_table_width = pdf.w - pdf.l_margin - pdf.r_margin  # на всю ширину страницы
+            SelectedFeatureGeometry = SelectedFeature.geometry()
+            max_table_width = pdf.w - pdf.l_margin - pdf.r_margin  # на всю ширину страницы
 
-        for i, pathLayer in enumerate(DATA_LAYERS, 1):
-            if progress.wasCanceled():
-                QMessageBox.information(None, "ISOGD", "Операция отменена.")
-                return
+            for i, pathLayer in enumerate(DATA_LAYERS, 1):
+                if progress.wasCanceled():
+                    QMessageBox.information(None, "ISOGD", "Операция отменена.")
+                    return
 
-            a = CheckLayers(pathLayer, SelectedFeatureGeometry)
+                a = CheckLayers(pathLayer, SelectedFeatureGeometry)
 
-            headers, rows = make_table_filtered(
-                a.fields, a.feat_intersect, a.procs, a.areas, pathLayer,
-                self.column_rules, self.default_rule
+                headers, rows = make_table_filtered(
+                    a.fields, a.feat_intersect, a.procs, a.areas, pathLayer,
+                    self.column_rules, self.default_rule
+                )
+
+                if not headers:
+                    headers = ["Нет данных"]
+                    rows = [["—"]]
+
+                is_bw = (len(rows) == 1 and len(rows[0]) == 1 and str(rows[0][0]).strip().lower() == "нет пересечений")
+
+                draw_table(
+                    pdf, title=pathLayer, headers=headers, rows=rows,
+                    max_total_width=max_table_width,
+                    font_name="Sans" if pdf.has_fonts else "helvetica",
+                    colored=not is_bw
+                )
+
+                pdf.ln(4)
+                progress.setValue(i)
+
+            # ---------- Имя файла: добавляем HHMMSS и случайные 3 цифры ----------
+            time_now = dt.datetime.now().strftime("%H%M%S")
+            rnd = random.randint(100, 999)
+
+            fields_source = SelectedFeature.fields()
+            f0_name = fields_source[0].name() if len(fields_source) > 0 else ""
+            f4_name = fields_source[4].name() if len(fields_source) > 4 else (
+                fields_source[max(0, len(fields_source)-1)].name() if len(fields_source) else ""
             )
 
-            if not headers:
-                headers = ["Нет данных"]
-                rows = [["—"]]
+            field_0 = str(SelectedFeature.attribute(f0_name)) if f0_name else ""
+            field_4 = str(SelectedFeature.attribute(f4_name)) if f4_name else ""
 
-            # ч/б стиль, если нет пересечений
-            is_bw = (len(rows) == 1 and len(rows[0]) == 1 and str(rows[0][0]).strip().lower() == "нет пересечений")
+            base_name = f"Вх№{field_0} {field_4} {time_now}-{rnd:03d}.pdf"
+            file_name = os.path.join(dir_name, safe_filename(base_name))
 
-            draw_table(
-                pdf, title=pathLayer, headers=headers, rows=rows,
-                max_total_width=max_table_width,
-                font_name="Sans" if pdf.has_fonts else "helvetica",
-                colored=not is_bw
-            )
-
-            pdf.ln(4)
-            progress.setValue(i)
-
-        time_now = dt.datetime.now().strftime("%H%M%S")
-        fields_source = SelectedFeature.fields()
-        f0_name = fields_source[0].name() if len(fields_source) > 0 else ""
-        f4_name = fields_source[4].name() if len(fields_source) > 4 else (fields_source[max(0, len(fields_source)-1)].name() if len(fields_source) else "")
-
-        field_0 = str(SelectedFeature.attribute(f0_name)) if f0_name else ""
-        field_4 = str(SelectedFeature.attribute(f4_name)) if f4_name else ""
-
-        base_name = f"Вх№{field_0} {field_4} {time_now}.pdf"
-        file_name = os.path.join(dir_name, safe_filename(base_name))
-
-        try:
-            pdf.output(file_name)
-            os.startfile(file_name)
-        except Exception as e:
-            log_err(f"Ошибка сохранения PDF: {e}")
-            QMessageBox.critical(None, "ISOGD", f"Не удалось сохранить PDF:\n{e}")
+            try:
+                pdf.output(file_name)
+                os.startfile(file_name)
+            except Exception as e:
+                log_err(f"Ошибка сохранения PDF: {e}")
+                QMessageBox.critical(None, "ISOGD", f"Не удалось сохранить PDF:\n{e}")
